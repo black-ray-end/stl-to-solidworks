@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import numpy as np
 from shapely.geometry import Point, Polygon
@@ -23,6 +24,17 @@ def validate(plan):
         axis, side = op["axis"], op["side"]
         if axis not in (0, 1, 2) or side not in (-1, 1):
             raise ValueError("Invalid face axis/side")
+        name = op.get("name", "")
+        view_prefix = re.match(r"^([XYZ])_(plus|minus)(?:_|$)", name)
+        if view_prefix:
+            expected_axis = "XYZ".index(view_prefix.group(1))
+            expected_side = 1 if view_prefix.group(2) == "plus" else -1
+            if (axis, side) != (expected_axis, expected_side):
+                actual = f"{'XYZ'[axis]}_{'plus' if side > 0 else 'minus'}"
+                raise ValueError(
+                    f"Operation {index} ({name}) names a {view_prefix.group(0).rstrip('_')} view "
+                    f"but uses the {actual} sketch plane; verify the source view and "
+                    "transform all contour coordinates before changing the plane")
         depth = float(op["depth_mm"])
         if not np.isfinite(depth) or depth <= 0 or depth > size[axis] + 1e-6:
             raise ValueError("Invalid cut depth")

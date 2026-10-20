@@ -99,6 +99,17 @@ class WorkflowTest(unittest.TestCase):
              "loops_mm": [square]}]}
         self.assertEqual(validate(valid).tolist(), [20, 20, 10])
 
+    def test_view_name_must_match_sketch_plane(self):
+        loop = [[2, 2, 0], [8, 2, 0], [8, 8, 0], [2, 8, 0], [2, 2, 0]]
+        op = {"name": "X_plus_outline_2", "axis": 2, "side": -1,
+              "depth_mm": 2, "loops_mm": [loop]}
+        plan = {"base": {"type": "box", "size_mm": [20, 20, 10]},
+                "operations": [op]}
+        with self.assertRaisesRegex(ValueError, "X_plus.*Z_minus"):
+            validate(plan)
+        op["name"] = "Z_minus_outline_2"
+        self.assertEqual(validate(plan).tolist(), [20, 20, 10])
+
 
 if __name__ == "__main__":
     unittest.main()
