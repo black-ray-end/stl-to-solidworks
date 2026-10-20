@@ -1,0 +1,47 @@
+{
+  "type": "axial_stages",
+  "stages": [
+    {
+      "name": "Front_shaft",
+      "x0_mm": 0,
+      "x1_mm": 10,
+      "center_yz_mm": [15, 15],
+      "diameter_mm": 12
+    },
+    {
+      "name": "Mounting_flange",
+      "x0_mm": 10,
+      "x1_mm": 13,
+      "outline_yz_mm": [[0, 0], [30, 0], [30, 30], [0, 30]]
+    },
+    {
+      "name": "Rear_shaft",
+      "x0_mm": 13,
+      "x1_mm": 30,
+      "center_yz_mm": [15, 15],
+      "diameter_mm": 12
+    }
+  ],
+  "cuts": [
+    {
+      "name": "Through_bore",
+      "axis": 0,
+      "coordinate_mm": 30,
+      "depth_mm": 30,
+      "circles": [{"center_mm": [30, 15, 15], "diameter_mm": 4}]
+    },
+    {
+      "name": "Flange_holes",
+      "axis": 0,
+      "coordinate_mm": 13,
+      "depth_mm": 3,
+      "circles": [
+        {"center_mm": [13, 4, 4], "diameter_mm": 3},
+        {"center_mm": [13, 26, 4], "diameter_mm": 3},
+        {"center_mm": [13, 4, 26], "diameter_mm": 3},
+        {"center_mm": [13, 26, 26], "diameter_mm": 3}
+      ]
+    }
+  ],
+  "notes": "Synthetic example only. Derive all dimensions and profiles from the actual input STL."
+}

@@ -11,6 +11,8 @@ import trimesh
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from prepare import prepare
 from build_model import validate
+from build_axial import validate as validate_axial
+from inspect_mesh import inspect
 
 
 class WorkflowTest(unittest.TestCase):
@@ -61,6 +63,25 @@ class WorkflowTest(unittest.TestCase):
                                 "circles": [{"center_mm": [5, 5, 0], "diameter_mm": 2}]}]}
         with self.assertRaises(ValueError):
             validate(plan)
+
+    def test_fast_inspection_reports_real_sections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "shaft.stl"
+            trimesh.creation.box(extents=[20, 10, 6]).export(source)
+            report = inspect(source, "mm", axis="X", sections=[0])
+            self.assertEqual(report["triangles"], 12)
+            self.assertEqual(report["components"], 1)
+            self.assertTrue(report["watertight"])
+            self.assertEqual(len(report["sections"]), 1)
+            self.assertAlmostEqual(report["sections"][0]["loops"][0]["area_mm2"], 60)
+
+    def test_axial_plan_validation(self):
+        plan = json.loads((Path(__file__).resolve().parents[1] / "examples" /
+                           "stepped_shaft_plan.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(validate_axial(plan)), 3)
+        plan["stages"][1]["x0_mm"] = 11
+        with self.assertRaises(ValueError):
+            validate_axial(plan)
 
 
 if __name__ == "__main__":

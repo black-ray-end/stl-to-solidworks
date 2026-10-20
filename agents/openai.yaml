@@ -1,4 +1,4 @@
 interface:
   display_name: "STL 重建 SolidWorks"
-  short_description: "提取 STL 多视角图片，使用 SolidWorks 2024 重建简单可编辑零件并整理交付"
-  default_prompt: "使用 $stl-to-solidworks，把我提供的 STL 先提取视图，再用 SolidWorks 2024 重建，并按模型和视图目录交付。"
+  short_description: "分析 STL 几何，由 Agent 选择建模方法并生成可编辑 SolidWorks 零件"
+  default_prompt: "使用 $stl-to-solidworks，分析我提供的 STL 和毫米单位，在 SolidWorks 2024 中重建可编辑零件并交付模型与视图。"
