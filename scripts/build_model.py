@@ -1,8 +1,10 @@
 """Build a reviewed feature plan in SolidWorks, defaulting strictly to 2024."""
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import numpy as np
+from shapely.geometry import Point, Polygon
 from sw_api import connect, template_path
 
 
@@ -17,7 +19,7 @@ def validate(plan):
         wall = float(base["wall_mm"])
         if not np.isfinite(wall) or not 0 < wall < min(size[1:]) / 2:
             raise ValueError("Invalid tube wall thickness")
-    for op in plan.get("operations", []):
+    for index, op in enumerate(plan.get("operations", [])):
         axis, side = op["axis"], op["side"]
         if axis not in (0, 1, 2) or side not in (-1, 1):
             raise ValueError("Invalid face axis/side")
@@ -27,17 +29,35 @@ def validate(plan):
         circles, loops = op.get("circles", []), op.get("loops_mm", [])
         if not circles and not loops:
             raise ValueError("An operation needs a circle or closed loop")
+        mode = op.get("loop_mode", "spline")
+        if mode not in ("spline", "polyline"):
+            raise ValueError(f"Operation {index} has an unknown loop_mode: {mode}")
         points = []
+        regions = []
+        other_axes = [i for i in range(3) if i != axis]
         for c in circles:
             r = float(c["diameter_mm"])
             if not np.isfinite(r) or r <= 0:
                 raise ValueError("Invalid circle diameter")
             points.append(c["center_mm"])
+            center = np.asarray(c["center_mm"], dtype=float)
+            if center.shape == (3,) and np.isfinite(center).all():
+                regions.append(Point(center[other_axes]).buffer(r / 2, quad_segs=32))
         for loop in loops:
             a = np.asarray(loop, dtype=float)
             if a.ndim != 2 or a.shape[1] != 3 or len(a) < 4 or not np.allclose(a[0], a[-1], atol=1e-8, rtol=0):
                 raise ValueError("Spline loops need at least four 3D points and identical endpoints")
+            if not np.isfinite(a).all():
+                raise ValueError(f"Operation {index} has nonfinite loop points")
+            polygon = Polygon(a[:-1, other_axes])
+            if not polygon.is_valid or polygon.area <= 1e-8:
+                raise ValueError(f"Operation {index} has a self-intersecting or zero-area loop")
+            regions.append(polygon)
             points.extend(loop)
+        for i, first in enumerate(regions):
+            for second in regions[i + 1:]:
+                if first.intersects(second):
+                    raise ValueError(f"Operation {index} has touching or overlapping sketch contours")
         p = np.asarray(points, dtype=float)
         coord = size[axis] if side > 0 else 0.
         if p.ndim != 2 or p.shape[1] != 3 or not np.isfinite(p).all():
@@ -54,13 +74,15 @@ def build(folder, year=2024, template=None, detailed=False):
     import win32com.client as w
     folder = Path(folder).resolve()
     model = folder / "模型"
-    plan = json.loads((model / "建模方案.json").read_text(encoding="utf-8"))
+    plan_bytes = (model / "建模方案.json").read_bytes()
+    plan = json.loads(plan_bytes.decode("utf-8-sig"))
     size = validate(plan)
     native = model / "重建.SLDPRT"
     checkpath = model / "检查结果.json"
     if native.exists() or checkpath.exists():
         raise FileExistsError("Native model or check report exists; use a new target folder")
-    report = {"status": "building", "requested_year": year}
+    report = {"status": "building", "requested_year": year,
+              "plan_sha256": hashlib.sha256(plan_bytes).hexdigest()}
     try:
         app, t, revision = connect(year)
         report["solidworks_revision"] = revision
@@ -137,6 +159,7 @@ def build(folder, year=2024, template=None, detailed=False):
         names = [feature.Name]
         for index, op in enumerate(plan.get("operations", [])):
             axis, side = op["axis"], op["side"]
+            loop_mode = op.get("loop_mode", "spline")
             coord = size[axis] / 1000 if side > 0 else 0.
             candidates = []
             for rawface in part.GetBodies2(0, False)[0].GetFaces():
@@ -147,6 +170,27 @@ def build(folder, year=2024, template=None, detailed=False):
             if not candidates:
                 raise RuntimeError(f"No suitable face for operation {index}")
             face = max(candidates, key=lambda f: f.GetArea())
+            report["last_operation"] = {
+                "index_zero_based": index,
+                "name": op.get("name", f"Cut_{index + 1}"),
+                "axis": axis, "side": side,
+                "depth_mm": float(op["depth_mm"]),
+                "loop_mode": loop_mode,
+                "circle_count": len(op.get("circles", [])),
+                "loop_point_counts": [len(loop) for loop in op.get("loops_mm", [])],
+                "selected_face_area_mm2": float(face.GetArea() * 1e6),
+                "selected_face_bounds_mm": (np.asarray(face.GetBox()) * 1000).tolist(),
+            }
+            if op.get("circles"):
+                distances = []
+                for circle in op["circles"]:
+                    center = np.asarray(circle["center_mm"], dtype=float) / 1000
+                    try:
+                        closest = np.asarray(face.GetClosestPointOn(*center), dtype=float)[:3]
+                        distances.append(float(np.linalg.norm(closest - center) * 1000))
+                    except Exception:
+                        distances.append(None)
+                report["last_operation"]["circle_center_distance_to_selected_face_mm"] = distances
             doc.ClearSelection2(True)
             if not t.IEntity(face._oleobj_).Select4(False, None):
                 raise RuntimeError("Cannot select cut plane")
@@ -159,9 +203,14 @@ def build(folder, year=2024, template=None, detailed=False):
             for loop in op.get("loops_mm", []):
                 points = local(loop)
                 points[-1] = points[0]
-                arr = w.VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_R8, points.ravel().tolist())
-                if sm.CreateSpline2(arr, False) is None:
-                    raise RuntimeError("Closed spline creation failed")
+                if loop_mode == "polyline":
+                    for i in range(len(points) - 1):
+                        if sm.CreateLine(*points[i], *points[i + 1]) is None:
+                            raise RuntimeError(f"Polyline segment {i} failed at operation {index}")
+                else:
+                    arr = w.VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_R8, points.ravel().tolist())
+                    if sm.CreateSpline2(arr, False) is None:
+                        raise RuntimeError(f"Closed spline creation failed at operation {index}")
             sm.AddToDB = False
             sm.InsertSketch(True)
             depth = float(op["depth_mm"]) / 1000
@@ -170,12 +219,26 @@ def build(folder, year=2024, template=None, detailed=False):
                 0., 0., False, False, False, False, False, True, True,
                 False, False, False, 0, 0., False, True)
             if cut is None:
-                raise RuntimeError(f"Cut failed at operation {index}")
+                if op.get("loops_mm"):
+                    report["failure_hint"] = (
+                        "FeatureCut4 returned no feature. Check that the sketch is closed, "
+                        "does not self-intersect after spline interpolation, and intersects "
+                        "the solid at the requested depth. If the spline alone fails, "
+                        "review a separate plan using loop_mode=polyline.")
+                else:
+                    report["failure_hint"] = (
+                        "FeatureCut4 returned no feature. Check whether the circles "
+                        "intersect solid material at the selected face and requested depth. "
+                        "A circle entirely inside a tube opening removes no material. "
+                        "Compare each circle radius with its center distance to the selected face.")
+                raise RuntimeError(f"Cut failed at operation {index} ({report['last_operation']['name']}); "
+                                   "see 检查结果.json for the selected face and sketch details")
             cut.Name = op.get("name", f"Cut_{index + 1}")
             names.append(cut.Name)
             doc.EditRebuild3()
             if len(part.GetBodies2(0, False) or []) != 1:
                 raise RuntimeError("Cut created disconnected bodies")
+        report.pop("last_operation", None)
         body = t.IBody2(part.GetBodies2(0, False)[0]._oleobj_)
         faults = int(body.Check3.Count)
         if faults:

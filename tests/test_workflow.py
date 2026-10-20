@@ -83,6 +83,22 @@ class WorkflowTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_axial(plan)
 
+    def test_cut_contours_rejected_before_solidworks(self):
+        base = {"type": "box", "size_mm": [20, 20, 10]}
+        crossed = [[2, 2, 10], [8, 8, 10], [2, 8, 10], [8, 2, 10], [2, 2, 10]]
+        with self.assertRaisesRegex(ValueError, "self-intersecting"):
+            validate({"base": base, "operations": [
+                {"axis": 2, "side": 1, "depth_mm": 1, "loops_mm": [crossed]}]})
+        square = [[2, 2, 10], [8, 2, 10], [8, 8, 10], [2, 8, 10], [2, 2, 10]]
+        with self.assertRaisesRegex(ValueError, "overlapping"):
+            validate({"base": base, "operations": [
+                {"axis": 2, "side": 1, "depth_mm": 1, "loops_mm": [square],
+                 "circles": [{"center_mm": [5, 5, 10], "diameter_mm": 2}]}]})
+        valid = {"base": base, "operations": [
+            {"axis": 2, "side": 1, "depth_mm": 1, "loop_mode": "polyline",
+             "loops_mm": [square]}]}
+        self.assertEqual(validate(valid).tolist(), [20, 20, 10])
+
 
 if __name__ == "__main__":
     unittest.main()
