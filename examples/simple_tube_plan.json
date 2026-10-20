@@ -1,0 +1,29 @@
+{
+  "base": {
+    "type": "tube",
+    "size_mm": [100, 16, 12],
+    "wall_mm": 1
+  },
+  "operations": [
+    {
+      "name": "Upper_round_hole",
+      "axis": 2,
+      "side": 1,
+      "depth_mm": 1,
+      "circles": [
+        {"center_mm": [10, 8, 12], "diameter_mm": 3}
+      ]
+    },
+    {
+      "name": "Lower_spline_opening",
+      "axis": 2,
+      "side": -1,
+      "depth_mm": 1,
+      "loops_mm": [
+        [[30, 3, 0], [40, 3, 0], [45, 6, 0], [40, 9, 0], [30, 9, 0], [30, 3, 0]]
+      ]
+    }
+  ],
+  "source_origin_mm": [0, 0, 0],
+  "notes": "Synthetic demonstration only; replace with a plan derived from the actual STL."
+}

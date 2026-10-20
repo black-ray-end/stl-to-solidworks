@@ -1,0 +1,6 @@
+numpy>=1.24,<3
+trimesh>=4.4,<5
+shapely>=2.0,<3
+matplotlib>=3.7,<4
+scipy>=1.10,<2
+pywin32>=306; sys_platform == "win32"
