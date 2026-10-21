@@ -10,7 +10,7 @@ import trimesh
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from prepare import prepare
-from build_model import validate
+from build_model import validate, remove_retraced_spurs
 from build_axial import validate as validate_axial
 from inspect_mesh import inspect
 
@@ -109,6 +109,19 @@ class WorkflowTest(unittest.TestCase):
             validate(plan)
         op["name"] = "Z_minus_outline_2"
         self.assertEqual(validate(plan).tolist(), [20, 20, 10])
+
+    def test_retraced_spur_is_removed_without_changing_plan(self):
+        loop = [[2, 2, 10], [8, 2, 10], [7, 3, 10], [8, 2, 10],
+                [8, 8, 10], [2, 8, 10], [2, 2, 10]]
+        plan = {"base": {"type": "box", "size_mm": [20, 20, 10]},
+                "operations": [{"axis": 2, "side": 1, "depth_mm": 1,
+                                "loops_mm": [loop]}]}
+        cleaned, changes = remove_retraced_spurs(plan)
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["removed_point_count"], 2)
+        self.assertEqual(len(cleaned["operations"][0]["loops_mm"][0]), 5)
+        self.assertEqual(len(plan["operations"][0]["loops_mm"][0]), 7)
+        self.assertEqual(validate(cleaned).tolist(), [20, 20, 10])
 
 
 if __name__ == "__main__":

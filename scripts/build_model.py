@@ -1,5 +1,6 @@
 """Build a reviewed feature plan in SolidWorks, defaulting strictly to 2024."""
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -7,6 +8,44 @@ from pathlib import Path
 import numpy as np
 from shapely.geometry import Point, Polygon
 from sw_api import connect, template_path
+
+
+def remove_retraced_spurs(plan, tolerance_mm=1e-5):
+    """Remove exact A-B-A detours that add no enclosed sketch area."""
+    cleaned = copy.deepcopy(plan)
+    changes = []
+    for index, op in enumerate(cleaned.get("operations", [])):
+        for loop_index, loop in enumerate(op.get("loops_mm", [])):
+            points = np.asarray(loop, dtype=float)
+            if points.ndim != 2 or points.shape[1] != 3 or not np.isfinite(points).all():
+                continue  # Let validate report malformed input.
+            removed = []
+            i = 1
+            while i < len(points) - 1:
+                if (np.linalg.norm(points[i - 1] - points[i + 1]) <= tolerance_mm
+                        and np.linalg.norm(points[i] - points[i - 1]) > tolerance_mm):
+                    # Retain the first A. The second A and the intervening B
+                    # trace the same segment twice and enclose no region.
+                    removed.extend((i, i + 1))
+                    points = np.delete(points, [i, i + 1], axis=0)
+                    i = max(1, i - 1)
+                else:
+                    i += 1
+            if removed:
+                if len(points) < 4 or np.linalg.norm(points[0] - points[-1]) > tolerance_mm:
+                    raise ValueError(f"Operation {index} loop {loop_index} cannot be cleaned safely")
+                axes = [j for j in range(3) if j != op["axis"]]
+                before = Polygon(np.asarray(loop)[:, axes])
+                after = Polygon(points[:, axes])
+                original_region = before if before.is_valid else before.buffer(0)
+                if (not after.is_valid or original_region.is_empty
+                        or original_region.symmetric_difference(after).area > 1e-7):
+                    raise ValueError(f"Operation {index} loop {loop_index} changes area after spur removal")
+                op["loops_mm"][loop_index] = points.tolist()
+                changes.append({"operation": index, "loop": loop_index,
+                                "removed_point_count": len(removed),
+                                "points_before": len(loop), "points_after": len(points)})
+    return cleaned, changes
 
 
 def validate(plan):
@@ -87,14 +126,15 @@ def build(folder, year=2024, template=None, detailed=False):
     folder = Path(folder).resolve()
     model = folder / "模型"
     plan_bytes = (model / "建模方案.json").read_bytes()
-    plan = json.loads(plan_bytes.decode("utf-8-sig"))
+    plan, spur_changes = remove_retraced_spurs(json.loads(plan_bytes.decode("utf-8-sig")))
     size = validate(plan)
     native = model / "重建.SLDPRT"
     checkpath = model / "检查结果.json"
     if native.exists() or checkpath.exists():
         raise FileExistsError("Native model or check report exists; use a new target folder")
     report = {"status": "building", "requested_year": year,
-              "plan_sha256": hashlib.sha256(plan_bytes).hexdigest()}
+              "plan_sha256": hashlib.sha256(plan_bytes).hexdigest(),
+              "retraced_spurs_removed": spur_changes}
     try:
         app, t, revision = connect(year)
         report["solidworks_revision"] = revision
